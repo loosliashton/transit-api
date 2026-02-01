@@ -26,6 +26,20 @@ A lightweight Python API using FastAPI to serve realtime departure boards for Ut
 
 3.  Access at `http://localhost:8000`.
 
+### Running with Docker Compose
+
+1.  **Start the Service**:
+
+    ```bash
+    docker-compose up -d
+    ```
+
+2.  **Stop the Service**:
+
+    ```bash
+    docker-compose down
+    ```
+
 ### Manual Setup
 
 1. **Install Dependencies**

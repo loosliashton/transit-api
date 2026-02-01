@@ -1,0 +1,11 @@
+services:
+  transit-api:
+    build: .
+    container_name: transit-api
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - PORT=8000
+      - GTFS_STATIC_URL=https://gtfsfeed.rideuta.com/GTFS.zip
+      - GTFS_REALTIME_URL=https://apps.rideuta.com/tms/gtfs/TripUpdate

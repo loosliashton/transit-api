@@ -6,14 +6,15 @@ from google.transit import gtfs_realtime_pb2
 from datetime import datetime
 import time
 import logging
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class GTFSService:
-    STATIC_URL = "https://gtfsfeed.rideuta.com/GTFS.zip"
-    REALTIME_URL = "https://apps.rideuta.com/tms/gtfs/TripUpdate"
+    STATIC_URL = os.getenv('GTFS_STATIC_URL')
+    REALTIME_URL = os.getenv('GTFS_REALTIME_URL')
     
     TYPE_REALTIME = "realtime"
     TYPE_SCHEDULED = "scheduled"
