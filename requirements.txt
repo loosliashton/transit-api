@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+requests
+pandas
+gtfs-realtime-bindings
+protobuf
