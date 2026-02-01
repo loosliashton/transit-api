@@ -15,6 +15,9 @@ class GTFSService:
     STATIC_URL = "https://gtfsfeed.rideuta.com/GTFS.zip"
     REALTIME_URL = "https://apps.rideuta.com/tms/gtfs/TripUpdate"
     
+    TYPE_REALTIME = "realtime"
+    TYPE_SCHEDULED = "scheduled"
+    
     def __init__(self):
         self._static_cache = {}
         self._last_static_update = 0
@@ -162,17 +165,38 @@ class GTFSService:
             
         return active_services
 
-    def get_scheduled_departures(self, stop_id_query):
-        """Get scheduled departures for today when realtime is unavailable."""
+    def _parse_gtfs_time(self, time_str: str, now: datetime) -> str:
+        """Parses GTFS time string (HH:MM:SS) handling >24h times."""
+        h, m, s = map(int, time_str.split(':'))
+        target_date = now
+        
+        if h >= 24:
+            h -= 24
+            target_date = now + pd.Timedelta(days=1)
+            
+        try:
+            return target_date.replace(hour=h, minute=m, second=s, microsecond=0).isoformat()
+        except ValueError:
+            return time_str
+
+    def get_scheduled_departures(self, stop_id_query: str) -> pd.DataFrame:
+        """
+        Get scheduled departures for today when realtime is unavailable.
+        
+        Args:
+            stop_id_query: The ID of the stop to query.
+            
+        Returns:
+            pd.DataFrame: DataFrame containing trip details and formatted arrival times.
+                          Returns empty DataFrame if stop not found or no trips.
+        """
         service_ids = self.get_active_service_ids()
         stops = self._static_cache['stops']
         
         # Get stop name safely
         stop_rows = stops[stops['stop_id'] == str(stop_id_query)]
         if stop_rows.empty:
-            return [] # Return empty list if stop not found (caller handles error)
-        # stop_name lookup moved to caller
-        
+            return pd.DataFrame() 
         
         # 1. Filter Trips by Service ID
         trips = self._static_cache['trips']
@@ -184,40 +208,34 @@ class GTFSService:
         st_filtered = st_filtered[st_filtered['trip_id'].isin(active_trips['trip_id'])]
         
         # 3. Filter by Time (Future only)
-        now_str = datetime.now().strftime('%H:%M:%S')
+        now = datetime.now()
+        now_str = now.strftime('%H:%M:%S')
         # Simple string comparison works for HH:MM:SS format
         future_st = st_filtered[st_filtered['departure_time'] > now_str].sort_values('departure_time')
         
         # 4. Join with Trips to get Headsign/Route
         merged = future_st.head(3).merge(active_trips, on='trip_id', how='left')
         
-        # Calculate formatted times
-        final_times = []
-        now = datetime.now()
-        for _, row in merged.iterrows():
-            time_str = row['departure_time']
-            h, m, s = map(int, time_str.split(':'))
-            
-            # Handle GTFS > 24h times
-            target_date = now
-            if h >= 24:
-                h -= 24
-                target_date = now + pd.Timedelta(days=1)
-                
-            try:
-                arrival_dt = target_date.replace(hour=h, minute=m, second=s, microsecond=0).isoformat()
-            except ValueError:
-                arrival_dt = time_str # Fallback
-            
-            final_times.append(arrival_dt)
+        if merged.empty:
+            return pd.DataFrame()
 
-        # Add formatted arrival time
-        merged['formatted_arrival_time'] = final_times
+        # Calculate formatted times using apply
+        merged['formatted_arrival_time'] = merged['departure_time'].apply(
+            lambda t: self._parse_gtfs_time(t, now)
+        )
         
         return merged
 
-    def search_stops(self, query: str):
-        """Search for stops by name."""
+    def search_stops(self, query: str) -> list[dict]:
+        """
+        Search for stops by name.
+        
+        Args:
+            query: The name to search for (case-insensitive).
+            
+        Returns:
+            list[dict]: List of matching stop dictionaries with keys: stop_id, stop_name, stop_lat, stop_lon.
+        """
         if not self._static_cache:
             self.load_static_data()
             
@@ -229,8 +247,17 @@ class GTFSService:
         
         return results[['stop_id', 'stop_name', 'stop_lat', 'stop_lon']].to_dict('records')
 
-    def get_departures_for_stop(self, stop_id_query):
-        """Returns departure board for a specific stop."""
+    def get_departures_for_stop(self, stop_id_query: str) -> dict:
+        """
+        Returns departure board for a specific stop.
+        
+        Args:
+            stop_id_query: The ID of the stop.
+            
+        Returns:
+            dict: JSON-compatible response with stop info and departure list.
+                  Returns {"error": ...} on failure.
+        """
         # Ensure static data is loaded
         if not self._static_cache:
             self.load_static_data()
@@ -244,7 +271,7 @@ class GTFSService:
         
         stop_name = stop_rows['stop_name'].values[0]
         final_df = pd.DataFrame()
-        dep_type = "scheduled"
+        dep_type = self.TYPE_SCHEDULED
 
         # Try Realtime
         try:
@@ -263,7 +290,7 @@ class GTFSService:
                         final_df['formatted_arrival_time'] = final_df['arrival_ts'].apply(
                             lambda ts: datetime.fromtimestamp(ts).isoformat()
                         )
-                        dep_type = "realtime"
+                        dep_type = self.TYPE_REALTIME
 
         except Exception as e:
             logger.error(f"Realtime fetch failed: {e}")
@@ -272,7 +299,7 @@ class GTFSService:
         if final_df.empty:
             logger.info(f"No live updates for stop {stop_id_query}, falling back to schedule.")
             final_df = self.get_scheduled_departures(stop_id_query)
-            dep_type = "scheduled"
+            dep_type = self.TYPE_SCHEDULED
 
         # Build final response
         results = []

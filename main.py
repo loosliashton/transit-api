@@ -21,7 +21,7 @@ def read_root():
     return {"message": "Welcome to the Transit API. Use /departures/{stop_id} to get times."}
 
 @app.get("/stops/search")
-def search_stops(name: str):
+def search_stops(name: str) -> list[dict]:
     """
     Search for stops by name (case-insensitive).
     Returns list of matching stops with IDs.
@@ -32,7 +32,7 @@ def search_stops(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/departures/{stop_id}")
-def get_departures(stop_id: str):
+def get_departures(stop_id: str) -> dict:
     """
     Get upcoming departures for a specific stop ID.
     Example stop IDs:
