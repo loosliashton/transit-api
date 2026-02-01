@@ -4,4 +4,4 @@ __pycache__/
 *.zip
 *.csv
 *.txt
-# Ignore notebooks if desired, but keeping them for now
+!requirements.txt
