@@ -144,6 +144,9 @@ class GTFSService:
 
         # Filter updates for the requested stop ID
         df_stop = df_rt[df_rt['stop_id'] == str(stop_id_query)].copy()
+
+        # Get the name of the stop
+        stop_name = self._static_cache['stops'][self._static_cache['stops']['stop_id'] == stop_id_query]['stop_name'].values[0]
         
         if df_stop.empty:
             return {"message": f"No upcoming realtime arrivals found for stop {stop_id_query}."}
@@ -152,21 +155,16 @@ class GTFSService:
         static_trips = self._static_cache['trips']
         merged = df_stop.merge(static_trips, on='clean_trip_id', how='left')
         
-        # Calculate minutes until arrival
-        merged['minutes_away'] = ((merged['arrival_ts'] - datetime.now().timestamp()) / 60).astype(int)
-        merged = merged.sort_values('minutes_away')
-        
         # Prepare JSON response
         results = []
         for _, row in merged.head(10).iterrows():
             results.append({
                 "route": row['route_short_name'] if pd.notna(row['route_short_name']) else "Unknown",
                 "headsign": row['trip_headsign'] if pd.notna(row['trip_headsign']) else "Unknown",
-                "minutes_away": int(row['minutes_away']),
                 "arrival_time": datetime.fromtimestamp(row['arrival_ts']).isoformat()
             })
             
-        return {"stop_id": stop_id_query, "departures": results}
+        return {"stop_id": stop_id_query, "stop_name": stop_name, "departures": results}
 
 # Global instance for simplicity in this context
 gtfs_service = GTFSService()
