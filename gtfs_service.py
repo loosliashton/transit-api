@@ -311,6 +311,7 @@ class GTFSService:
             for _, row in final_df.iterrows():
                 results.append({
                     "route": row['route_short_name'] if pd.notna(row['route_short_name']) else "Unknown",
+                    "route_name": row['route_long_name'] if pd.notna(row['route_long_name']) else "Unknown",
                     "headsign": row['trip_headsign'] if pd.notna(row['trip_headsign']) else "Unknown",
                     "arrival_time": row['formatted_arrival_time'],
                     "departure_type": dep_type
