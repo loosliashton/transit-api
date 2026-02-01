@@ -1,0 +1,7 @@
+__pycache__/
+.venv/
+.env
+*.zip
+*.csv
+*.txt
+# Ignore notebooks if desired, but keeping them for now
