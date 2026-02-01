@@ -10,8 +10,11 @@ COPY . /app
 # Upgrade pip and install build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install dependencies individually to isolate build failures
+RUN pip install --no-cache-dir pandas
+RUN pip install --no-cache-dir protobuf
+RUN pip install --no-cache-dir gtfs-realtime-bindings
+RUN pip install --no-cache-dir fastapi uvicorn requests
 
 # Make port 8000 available to the world outside this container
 EXPOSE 8000
