@@ -1,26 +1,27 @@
-# Use an official Python runtime (full version to include build tools)
-FROM python:3.11
+# Use official lightweight Python image
+FROM python:3.11-slim
 
-# Set the working directory in the container
+# Set working directory
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Install system build dependencies (often needed for pandas/protobuf on slim images)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install build tools
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Optimize caching: Copy requirements and install dependencies first
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies individually to isolate build failures
-RUN pip install --no-cache-dir pandas
-RUN pip install --no-cache-dir protobuf
-RUN pip install --no-cache-dir gtfs-realtime-bindings
-RUN pip install --no-cache-dir fastapi uvicorn requests
+# Copy the rest of the application
+COPY . .
 
-# Make port 8000 available to the world outside this container
+# Make port 8000 available
 EXPOSE 8000
 
 # Define environment variable
 ENV PORT=8000
 
-# Run main.py when the container launches
+# Run main.py
 CMD ["python", "main.py"]
