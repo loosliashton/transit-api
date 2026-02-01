@@ -40,6 +40,8 @@ class GTFSService:
             routes = read_file('routes.txt')
             stops = read_file('stops.txt')
             stop_times = read_file('stop_times.txt')
+            calendar = read_file('calendar.txt')
+            calendar_dates = read_file('calendar_dates.txt')
             
             # Normalize Trip IDs: UTA Static IDs often have suffixes (e.g., 1234_WKD)
             # while Realtime IDs do not (e.g., 1234). We strip the suffix to ensure matching.
@@ -52,6 +54,8 @@ class GTFSService:
             self._static_cache['trips'] = trips_merged
             self._static_cache['stops'] = stops
             self._static_cache['stop_times'] = stop_times
+            self._static_cache['calendar'] = calendar
+            self._static_cache['calendar_dates'] = calendar_dates
             
             # Build a lookup table to map (Trip ID, Stop Sequence) -> Stop ID.
             # This is critical because the realtime feed provides Trip ID and Stop Sequence,
@@ -122,6 +126,96 @@ class GTFSService:
             logger.error(f"Failed to fetch realtime data: {e}")
             return pd.DataFrame()
 
+
+
+    def get_active_service_ids(self):
+        """Returns a set of service_ids active for the current day."""
+        if not self._static_cache:
+            self.load_static_data()
+
+        now = datetime.now()
+        current_date_str = now.strftime('%Y%m%d')
+        day_of_week = now.strftime('%A').lower()  # e.g., 'monday'
+
+        active_services = set()
+        
+        # 1. Check calendar.txt
+        cal = self._static_cache.get('calendar')
+        if cal is not None:
+            # Filter by date range
+            mask = (cal['start_date'] <= current_date_str) & (cal['end_date'] >= current_date_str)
+            # Filter by day of week
+            mask = mask & (cal[day_of_week] == '1')
+            active_services.update(cal[mask]['service_id'].unique())
+
+        # 2. Check calendar_dates.txt (exceptions)
+        cal_dates = self._static_cache.get('calendar_dates')
+        if cal_dates is not None:
+            # Exception type 1 = Added service, 2 = Removed service
+            day_exceptions = cal_dates[cal_dates['date'] == current_date_str]
+            
+            added = day_exceptions[day_exceptions['exception_type'] == '1']['service_id']
+            removed = day_exceptions[day_exceptions['exception_type'] == '2']['service_id']
+            
+            active_services.update(added)
+            active_services.difference_update(removed)
+            
+        return active_services
+
+    def get_scheduled_departures(self, stop_id_query):
+        """Get scheduled departures for today when realtime is unavailable."""
+        service_ids = self.get_active_service_ids()
+        stops = self._static_cache['stops']
+        
+        # Get stop name safely
+        stop_rows = stops[stops['stop_id'] == str(stop_id_query)]
+        if stop_rows.empty:
+            return [] # Return empty list if stop not found (caller handles error)
+        # stop_name lookup moved to caller
+        
+        
+        # 1. Filter Trips by Service ID
+        trips = self._static_cache['trips']
+        active_trips = trips[trips['service_id'].isin(service_ids)]
+        
+        # 2. Filter Stop Times by Stop ID and Active Trips
+        stop_times = self._static_cache['stop_times']
+        st_filtered = stop_times[stop_times['stop_id'] == str(stop_id_query)]
+        st_filtered = st_filtered[st_filtered['trip_id'].isin(active_trips['trip_id'])]
+        
+        # 3. Filter by Time (Future only)
+        now_str = datetime.now().strftime('%H:%M:%S')
+        # Simple string comparison works for HH:MM:SS format
+        future_st = st_filtered[st_filtered['departure_time'] > now_str].sort_values('departure_time')
+        
+        # 4. Join with Trips to get Headsign/Route
+        merged = future_st.head(3).merge(active_trips, on='trip_id', how='left')
+        
+        # Calculate formatted times
+        final_times = []
+        now = datetime.now()
+        for _, row in merged.iterrows():
+            time_str = row['departure_time']
+            h, m, s = map(int, time_str.split(':'))
+            
+            # Handle GTFS > 24h times
+            target_date = now
+            if h >= 24:
+                h -= 24
+                target_date = now + pd.Timedelta(days=1)
+                
+            try:
+                arrival_dt = target_date.replace(hour=h, minute=m, second=s, microsecond=0).isoformat()
+            except ValueError:
+                arrival_dt = time_str # Fallback
+            
+            final_times.append(arrival_dt)
+
+        # Add formatted arrival time
+        merged['formatted_arrival_time'] = final_times
+        
+        return merged
+
     def search_stops(self, query: str):
         """Search for stops by name."""
         if not self._static_cache:
@@ -137,32 +231,59 @@ class GTFSService:
 
     def get_departures_for_stop(self, stop_id_query):
         """Returns departure board for a specific stop."""
-        df_rt = self.get_realtime_updates()
-        
-        if df_rt.empty:
-            return {"error": "No active realtime trips found."}
+        # Ensure static data is loaded
+        if not self._static_cache:
+            self.load_static_data()
 
-        # Filter updates for the requested stop ID
-        df_stop = df_rt[df_rt['stop_id'] == str(stop_id_query)].copy()
-
-        # Get the name of the stop
-        stop_name = self._static_cache['stops'][self._static_cache['stops']['stop_id'] == stop_id_query]['stop_name'].values[0]
+        # Validate stop and get name
+        stops = self._static_cache['stops']
+        stop_rows = stops[stops['stop_id'] == str(stop_id_query)]
         
-        if df_stop.empty:
-            return {"message": f"No upcoming realtime arrivals found for stop {stop_id_query}."}
-
-        # Merge Realtime data with Static GTFS data to retrieve Route Name and Headsign.
-        static_trips = self._static_cache['trips']
-        merged = df_stop.merge(static_trips, on='clean_trip_id', how='left')
+        if stop_rows.empty:
+             return {"error": f"Stop {stop_id_query} not found."}
         
-        # Prepare JSON response
+        stop_name = stop_rows['stop_name'].values[0]
+        final_df = pd.DataFrame()
+        dep_type = "scheduled"
+
+        # Try Realtime
+        try:
+            df_rt = self.get_realtime_updates()
+            if not df_rt.empty:
+                 # Filter updates for the requested stop ID
+                 df_stop = df_rt[df_rt['stop_id'] == str(stop_id_query)].copy()
+                 
+                 if not df_stop.empty:
+                    # Merge Realtime data with Static GTFS data
+                    static_trips = self._static_cache['trips']
+                    final_df = df_stop.merge(static_trips, on='clean_trip_id', how='left').head(10)
+                    
+                    if not final_df.empty:
+                        # Calculate formatted arrival time for realtime
+                        final_df['formatted_arrival_time'] = final_df['arrival_ts'].apply(
+                            lambda ts: datetime.fromtimestamp(ts).isoformat()
+                        )
+                        dep_type = "realtime"
+
+        except Exception as e:
+            logger.error(f"Realtime fetch failed: {e}")
+
+        # If no realtime results, fallback to schedule
+        if final_df.empty:
+            logger.info(f"No live updates for stop {stop_id_query}, falling back to schedule.")
+            final_df = self.get_scheduled_departures(stop_id_query)
+            dep_type = "scheduled"
+
+        # Build final response
         results = []
-        for _, row in merged.head(10).iterrows():
-            results.append({
-                "route": row['route_short_name'] if pd.notna(row['route_short_name']) else "Unknown",
-                "headsign": row['trip_headsign'] if pd.notna(row['trip_headsign']) else "Unknown",
-                "arrival_time": datetime.fromtimestamp(row['arrival_ts']).isoformat()
-            })
+        if not final_df.empty:
+            for _, row in final_df.iterrows():
+                results.append({
+                    "route": row['route_short_name'] if pd.notna(row['route_short_name']) else "Unknown",
+                    "headsign": row['trip_headsign'] if pd.notna(row['trip_headsign']) else "Unknown",
+                    "arrival_time": row['formatted_arrival_time'],
+                    "departure_type": dep_type
+                })
             
         return {"stop_id": stop_id_query, "stop_name": stop_name, "departures": results}
 
