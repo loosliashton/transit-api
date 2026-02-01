@@ -282,6 +282,9 @@ class GTFSService:
                  df_stop = df_rt[df_rt['stop_id'] == str(stop_id_query)].copy()
                  
                  if not df_stop.empty:
+                    # Sort by arrival time to show soonest first
+                    df_stop = df_stop.sort_values('arrival_ts')
+                    
                     # Merge Realtime data with Static GTFS data
                     static_trips = self._static_cache['trips']
                     final_df = df_stop.merge(static_trips, on='clean_trip_id', how='left').head(10)
@@ -312,6 +315,9 @@ class GTFSService:
                     "arrival_time": row['formatted_arrival_time'],
                     "departure_type": dep_type
                 })
+            
+        # Ensure departures are sorted chronologically
+        results.sort(key=lambda x: x['arrival_time'])
             
         return {"stop_id": stop_id_query, "stop_name": stop_name, "departures": results}
 
