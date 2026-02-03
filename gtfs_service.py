@@ -13,8 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class GTFSService:
-    STATIC_URL = os.getenv('GTFS_STATIC_URL')
-    REALTIME_URL = os.getenv('GTFS_REALTIME_URL')
+    STATIC_URL = os.getenv('GTFS_STATIC_URL', 'https://gtfsfeed.rideuta.com/GTFS.zip')
+    REALTIME_URL = os.getenv('GTFS_REALTIME_URL', 'https://apps.rideuta.com/tms/gtfs/TripUpdate')
     
     TYPE_REALTIME = "realtime"
     TYPE_SCHEDULED = "scheduled"
@@ -205,7 +205,12 @@ class GTFSService:
         
         # 2. Filter Stop Times by Stop ID and Active Trips
         stop_times = self._static_cache['stop_times']
-        st_filtered = stop_times[stop_times['stop_id'] == str(stop_id_query)]
+        st_filtered = stop_times[stop_times['stop_id'] == str(stop_id_query)].copy()
+        
+        # Normalize departure_time: UTA GTFS uses leading spaces for single-digit hours (e.g., " 6:00:00")
+        # We replace them with '0' so string comparison with "09:00:00" works correctly.
+        st_filtered['departure_time'] = st_filtered['departure_time'].str.replace(' ', '0')
+        
         st_filtered = st_filtered[st_filtered['trip_id'].isin(active_trips['trip_id'])]
         
         # 3. Filter by Time (Future only)
